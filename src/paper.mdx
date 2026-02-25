@@ -1,0 +1,147 @@
+---
+title: "Knowledge Graphs are Implicit Reward Models: Path-Derived Signals Enable Compositional Reasoning"
+authors:
+  - name: Yuval Kansal
+    url: https://yuvalkansal.me/
+    institution: Princeton University
+  - name: Niraj K. Jha
+    url: https://ece.princeton.edu/people/niraj-jha
+    institution: Princeton University
+links:
+  - name: Paper
+    url: https://arxiv.org/pdf/2601.15160
+    icon: ri:file-pdf-2-line
+  - name: Blog
+    url: https://yuvalkansal.me/blog/2026/scaling-rl-to-non-verifiable-domains/
+    icon: ri:article-line
+  - name: Code
+    url: https://github.com/yuvalkansal/kg_si_rl
+    icon: ri:github-line
+  - name: Thread
+    url: https://x.com/yuvalkansal/status/2014690594577383821?s=20
+    icon: ri:twitter-x-line
+
+theme: light
+favicon: favicon.svg
+description: "Path-derived rewards from knowledge graphs teach a 14B model to compose multi-hop reasoning chains, outperforming GPT-5.2 and Gemini 3 Pro on the hardest medical queries."
+thumbnail: screenshot-light.png
+---
+
+import HighlightedSection from "./components/HighlightedSection.astro";
+import Figure from "./components/Figure.astro";
+import TwoColumns from "./components/TwoColumns.astro";
+
+<HighlightedSection>
+
+## Abstract
+
+Large language models have achieved near-expert performance in structured reasoning domains like mathematics and programming, yet their ability to perform compositional multi-hop reasoning in specialized scientific fields remains limited. We propose a bottom-up learning paradigm in which models are grounded in axiomatic domain facts and compose them to solve complex, unseen tasks. To this end, we present a post-training pipeline, based on a combination of supervised fine-tuning (SFT) and reinforcement learning (RL), in which knowledge graphs (KGs) act as implicit reward models. By deriving novel reward signals from KG paths, we provide verifiable, scalable, and grounded supervision that encourages models to compose intermediate axioms rather than optimize only final answers during RL. We validate this approach in the medical domain, training a 14B model on short-hop reasoning paths (1-3 hops) and evaluating its zero-shot generalization to complex multi-hop queries (4-5 hops). Our experiments show that path-derived rewards act as a "compositional bridge", enabling our model to significantly outperform much larger models and frontier systems like GPT-5.2 and Gemini 3 Pro, on the most difficult reasoning tasks. Furthermore, we demonstrate the robustness of our approach to adversarial perturbations against option-shuffling stress tests. This work suggests that grounding the reasoning process in structured knowledge is a scalable and efficient path toward intelligent reasoning.
+
+</HighlightedSection>
+
+## Compositional Reasoning is the Hard Part
+
+Large language models excel in domains where ground truth is clear and data are abundant. But **compositional multi-hop reasoning** — chaining a sequence of axiomatic facts to reach a conclusion — remains elusive, especially in high-stakes scientific domains. A single clinical question may require traversing a chain from symptoms to pathophysiology to mechanism to intervention, each step a verifiable inference grounded in domain knowledge.
+
+<Figure>
+  <img slot="figure" src="/figures/example_hops.png" alt="Sample 3-hop medical reasoning query" class="w-full" />
+  <span slot="caption">**A sample 3-hop compositional reasoning query.** Answering correctly requires systematic traversal of axiomatic triples from the UMLS KG, not pattern matching on surface features.</span>
+</Figure>
+
+Existing post-training methods — Reinforcement Learning from Human Feedback (RLHF), Direct Preference Optimization (DPO), distillation — optimize models to match preferred *final outputs*. They reward the answer, not the process. This produces brittle reasoning that fails on out-of-distribution multi-hop tasks and is sensitive to superficial cues like option order.
+
+## Knowledge Graphs as Implicit Reward Models
+
+The key insight: **every KG path is already a ground-truth process supervision signal**. A model whose reasoning trace mentions the correct intermediate entities and relations has demonstrably engaged with the right axiomatic steps. We don't need human annotators to evaluate this — we just compare tokens.
+
+This idea is **domain-agnostic**. Any field with a structured KG — from biomedical ontologies to case law to chemistry — can use the same pipeline. We validate in medicine using the Unified Medical Language System (UMLS), a large-scale biomedical KG encoding canonical relationships between diseases, drugs, symptoms, and mechanisms.
+
+## Training Pipeline
+
+<Figure>
+  <img slot="figure" src="/figures/pipeline.png" alt="SFT+RL training pipeline" class="w-full" />
+  <span slot="caption">**SFT+RL Pipeline.** SFT grounds the model in atomic domain facts; path-derived RL rewards then teach it to compose those facts into multi-hop chains.</span>
+</Figure>
+
+The pipeline has three stages, using data from [Dedhia et al. (2025)](https://arxiv.org/abs/2507.13966), the paper that introduces the ICD-Bench benchmark and the KG-grounded data curation pipeline:
+
+1. **Data Construction.** We generate 24,660 Multiple Choice Question (MCQ) training tasks (1–3 hop paths) from UMLS, each paired with a chain-of-thought reasoning trace and a ground-truth KG path. The held-out test set is ICD-Bench — 3,675 questions spanning 2–5 hop paths across 15 ICD-10 categories.
+
+2. **Supervised Fine-Tuning via Low-Rank Adaptation (LoRA).** The base Qwen3 model is SFT fine-tuned on 19,660 examples to establish broad domain knowledge and high-quality reasoning format. We find that **RL without SFT is insufficient** — Zero-RL never consistently outperforms SFT-only, confirming the model needs an axiomatic foundation before it can learn to compose.
+
+3. **Reinforcement Learning via Group Relative Policy Optimization (GRPO).** GRPO is applied to the remaining 5,000 examples using the KG-grounded reward. The RL stage is deliberately compact — targeted rewards on top of a strong SFT base maximize compositional gains.
+
+## KG-Grounded Reward
+
+The total reward balances outcome correctness with path-level process supervision:
+
+$$
+R_{\text{total}} = R_{\text{bin}}(\hat{a}, a^*) + R_{\text{path}}(r, P)
+$$
+
+**Binary correctness** uses an asymmetric signal ($\alpha = 0.1$ for correct, $\beta = 1$ for wrong) to penalize errors more than it rewards correctness, following [Zhu et al. (2025)](https://arxiv.org/abs/2506.01347):
+
+$$
+R_{\text{bin}}(\hat{a}, a^*) = \begin{cases} 0.1 & \text{if } \hat{a} = a^* \\ -1 & \text{otherwise} \end{cases}
+$$
+
+**Path alignment** measures how much of the ground-truth KG path appears in the model's reasoning trace. A minimum-hit constraint (≥ 2 distinct entities) prevents trivial matches; a repetition penalty discourages reward hacking:
+
+$$
+R_{\text{path}}(r, P) = \min\!\left(1.2 \cdot \frac{|T(r) \cap T(P)|}{|T(P)|} + 0.3 \cdot \mathbf{I}(|T(r) \cap T(P)| \geq 2),\; 1.5\right) \times \phi_{\text{rep}}
+$$
+
+## Results
+
+**Setup.** We evaluate three systems on the held-out ICD-Bench test set (3,675 tasks): Base Qwen3 14B, a model SFT fine-tuned using LoRA on the full 24,660-task training set (SFT-Only), and our SFT+RL pipeline (SFT on 19,660 tasks followed by GRPO on 5k tasks). We additionally compare against frontier models and [QwQ-Med-3 (32B)](https://arxiv.org/abs/2507.13966) — the best model from Dedhia et al. (2025), fine-tuned on similar KG-grounded data distribution.
+
+<TwoColumns>
+  <Figure slot="left">
+    <img slot="figure" src="/figures/hop_generalizability.png" alt="Accuracy by hop length" class="figure-img" />
+    <span slot="caption">**Accuracy by Hop Length.** Our SFT+RL model not only outperforms baselines on 2–3 hop tasks but exhibits a positive performance gradient on unseen 4–5 hop reasoning tasks, validating the "compositional bridge" enabled by path-aligned rewards.</span>
+  </Figure>
+  <Figure slot="right">
+    <img slot="figure" src="/figures/frontier_comparison.png" alt="Comparison against frontier models" class="figure-img" />
+    <span slot="caption">**Accuracy vs. Frontier Models by Hop Level.** Whereas the accuracy of generalist giants decays on longer chains, our 14B SFT+RL model achieves its highest accuracy on unseen 5-hop queries, validating the KG as a superior supervisor for complex composition.</span>
+  </Figure>
+</TwoColumns>
+
+**Path-derived signals enable compositional reasoning.** Whereas the model was exposed to 1–3 hop paths during training, it remained totally naive to tasks involving 4–5 hop reasoning. The SFT+RL model demonstrates substantially stronger generalization to longer paths, achieving a gain of **7.5%** on unseen 4-hop and **11.1%** on unseen 5-hop questions relative to the SFT-only approach. Importantly, the generalization gap widens as hop-length increases — a hallmark of genuine compositional learning. The model achieves its highest accuracy (**89.33%**) on the most difficult 5-hop queries.
+
+**Dominance in high-complexity tasks.** On Level-5 tasks (very hard), the base model accuracy collapses to **19.94%** — worse-than-random-guess on a 4-choice MCQ. The SFT-only approach improves this to **48.93%**; our SFT+RL model achieves **56.75%**, nearly tripling base model performance. On Level-1 tasks, our model reaches near-ceiling accuracy (**93.49%**), maintaining a consistent 7–10% lead over SFT-only across all difficulty levels.
+
+### Table 1: Analysis of Option Format Perturbation
+
+The order of incorrect distractor options is randomized while keeping the correct answer choice constant. GPT-5 and Gemini-2.5 Pro suffer drops of 4–6% under similar perturbations; our models maintain stability with a negligible drop of ~1%.
+
+| Method | Standard | Shuffled | $\Delta$ |
+| :--- | :---: | :---: | :---: |
+| SFT-Only | 75.95% | 74.91% | $-1.04\%$ |
+| **SFT+RL (Ours)** | **83.62%** | **82.45%** | $-1.17\%$ |
+
+### Table 2: Performance by Difficulty Level (Majority Voting, $n=16$)
+
+Comparison with [QwQ-Med-3 (32B)](https://arxiv.org/abs/2507.13966), the best model from Dedhia et al. (2025), trained on the same KG-grounded data distribution. Our 14B model bridges the recall–reasoning gap and outperforms the larger model on all but the easiest tasks.
+
+| Difficulty | QwQ-Med-3 32B | Ours-14B | $\Delta$ |
+| :---: | :---: | :---: | :---: |
+| 1 | **96.75%** | 94.23% | $-2.52\%$ |
+| 2 | 83.79% | **85.63%** | $+1.84\%$ |
+| 3 | 79.33% | **80.33%** | $+1.00\%$ |
+| 4 | 70.56% | **71.50%** | $+0.94\%$ |
+| 5 | 49.69% | **59.05%** | $+9.36\%$ |
+
+## BibTeX
+
+```bibtex
+@misc{kansal2026kgs,
+  title         = {Knowledge Graphs are Implicit Reward Models:
+                   Path-Derived Signals Enable Compositional Reasoning},
+  author        = {Kansal, Yuval and Jha, Niraj K.},
+  year          = {2026},
+  eprint        = {2601.15160},
+  archiveprefix = {arXiv},
+  primaryclass  = {cs.AI},
+  url           = {https://arxiv.org/abs/2601.15160}
+}
+```
